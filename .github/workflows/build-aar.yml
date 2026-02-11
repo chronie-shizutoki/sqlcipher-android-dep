@@ -142,12 +142,7 @@ jobs:
               -static \
               no-shared \
               no-asm \
-              no-ssl2 \
-              no-ssl3 \
-              no-weak-ssl-ciphers \
               no-zlib \
-              no-zlib-dynamic \
-              no-fuzz \
               --prefix=$PWD/install
             
             make -j$(nproc)
