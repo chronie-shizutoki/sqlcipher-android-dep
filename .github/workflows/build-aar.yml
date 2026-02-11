@@ -143,6 +143,7 @@ jobs:
               no-shared \
               no-asm \
               no-zlib \
+              no-tests \
               --prefix=$PWD/install
             
             make -j$(nproc)
