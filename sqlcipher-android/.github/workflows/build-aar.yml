@@ -18,7 +18,7 @@ on:
 env:
   SQLCIPHER_VERSION: 4.12.0
   OPENSSL_VERSION: 3.0.15
-  NDK_VERSION: 29.0.14206865
+  NDK_VERSION: 27.3.13750724
   ANDROID_SDK_VERSION: 36
 
 jobs:
@@ -45,11 +45,11 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Setup Android NDK
-        uses: nttld/setup-ndk@v1
-        with:
-          ndk-version: ${{ env.NDK_VERSION }}
-          add-to-path: true
+      - name: Install Android NDK
+        run: |
+          yes | sdkmanager "ndk;${{ env.NDK_VERSION }}"
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/${{ env.NDK_VERSION }}" >> $GITHUB_ENV
+          echo "NDK_HOME=$ANDROID_SDK_ROOT/ndk/${{ env.NDK_VERSION }}" >> $GITHUB_ENV
 
       - name: Cache Gradle packages
         uses: actions/cache@v4
