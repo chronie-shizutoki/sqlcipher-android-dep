@@ -85,7 +85,7 @@ jobs:
           tar -xzf sqlcipher.tar.gz
           cd sqlcipher-${SQLCIPHER_VERSION}
           
-          ./configure --enable-tempstore=yes CFLAGS="-DSQLITE_HAS_CODEC"
+          ./configure CFLAGS="-DSQLITE_HAS_CODEC"
           make sqlite3.c
           
           cp sqlite3.c sqlite3.h ../
