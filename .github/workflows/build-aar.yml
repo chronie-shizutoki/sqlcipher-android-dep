@@ -85,7 +85,6 @@ jobs:
           tar -xzf sqlcipher.tar.gz
           cd sqlcipher-${SQLCIPHER_VERSION}
           
-          ./configure --with-crypto-lib=none
           make sqlite3.c
           
           cp sqlite3.c sqlite3.h ../
