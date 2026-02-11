@@ -1,0 +1,251 @@
+name: Build SQLCipher Android AAR
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - develop
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+      - master
+      - develop
+  workflow_dispatch:
+
+env:
+  SQLCIPHER_VERSION: 4.12.0
+  OPENSSL_VERSION: 3.0.15
+  NDK_VERSION: 29.0.14206865
+  ANDROID_SDK_VERSION: 36
+
+jobs:
+  build-aar:
+    name: Build AAR for ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+        include:
+          - os: ubuntu-latest
+            gradlew: ./gradlew
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: ${{ env.NDK_VERSION }}
+          add-to-path: true
+
+      - name: Cache Gradle packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Cache OpenSSL build
+        uses: actions/cache@v4
+        with:
+          path: |
+            openssl-build
+            sqlcipher-amalgamation
+          key: ${{ runner.os }}-openssl-${{ env.OPENSSL_VERSION }}-sqlcipher-${{ env.SQLCIPHER_VERSION }}
+          restore-keys: |
+            ${{ runner.os }}-openssl-${{ env.OPENSSL_VERSION }}-
+
+      - name: Install build dependencies (Ubuntu)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential make perl
+
+      - name: Download and prepare SQLCipher amalgamation
+        run: |
+          mkdir -p sqlcipher-amalgamation
+          cd sqlcipher-amalgamation
+          
+          curl -L -o sqlcipher.tar.gz "https://github.com/sqlcipher/sqlcipher/archive/v${SQLCIPHER_VERSION}.tar.gz"
+          tar -xzf sqlcipher.tar.gz
+          cd sqlcipher-${SQLCIPHER_VERSION}
+          
+          ./configure --with-crypto-lib=none
+          make sqlite3.c
+          
+          cp sqlite3.c sqlite3.h ../
+          cd ..
+          rm -rf sqlcipher-${SQLCIPHER_VERSION} sqlcipher.tar.gz
+
+      - name: Build OpenSSL for Android
+        run: |
+          mkdir -p openssl-build
+          cd openssl-build
+          
+          curl -L -o openssl.tar.gz "https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz"
+          tar -xzf openssl.tar.gz
+          cd openssl-${OPENSSL_VERSION}
+          
+          ANDROID_NDK_HOME=$ANDROID_NDK_HOME
+          
+          for arch in armeabi-v7a arm64-v8a x86 x86_64; do
+            case $arch in
+              armeabi-v7a)
+                ANDROID_ABI=armeabi-v7a
+                ANDROID_ARCH=arm
+                ANDROID_TOOLCHAIN=arm-linux-androideabi
+                ;;
+              arm64-v8a)
+                ANDROID_ABI=arm64-v8a
+                ANDROID_ARCH=arm64
+                ANDROID_TOOLCHAIN=aarch64-linux-android
+                ;;
+              x86)
+                ANDROID_ABI=x86
+                ANDROID_ARCH=x86
+                ANDROID_TOOLCHAIN=i686-linux-android
+                ;;
+              x86_64)
+                ANDROID_ABI=x86_64
+                ANDROID_ARCH=x86_64
+                ANDROID_TOOLCHAIN=x86_64-linux-android
+                ;;
+            esac
+            
+            echo "Building OpenSSL for $ANDROID_ABI"
+            
+            mkdir -p build-$ANDROID_ABI
+            cd build-$ANDROID_ABI
+            
+            export ANDROID_NDK_ROOT=$ANDROID_NDK_HOME
+            export PATH=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
+            
+            ../Configure \
+              android-$ANDROID_ARCH \
+              -D__ANDROID_API__=21 \
+              -fPIC \
+              -static \
+              no-shared \
+              no-asm \
+              no-ssl2 \
+              no-ssl3 \
+              no-weak-ssl-ciphers \
+              no-zlib \
+              no-zlib-dynamic \
+              --prefix=$PWD/install
+            
+            make -j$(nproc)
+            make install
+            
+            cd ..
+          done
+
+      - name: Copy OpenSSL libraries to project
+        run: |
+          mkdir -p sqlcipher/src/main/jni/sqlcipher/android-libs/include
+          
+          cd openssl-build/openssl-${OPENSSL_VERSION}
+          
+          for arch in armeabi-v7a arm64-v8a x86 x86_64; do
+            mkdir -p ../../sqlcipher/src/main/jni/sqlcipher/android-libs/$arch
+            cp build-$arch/install/lib/libcrypto.a ../../sqlcipher/src/main/jni/sqlcipher/android-libs/$arch/
+          done
+          
+          cp -r build-armeabi-v7a/install/include/* ../../sqlcipher/src/main/jni/sqlcipher/android-libs/include/
+
+      - name: Copy SQLCipher amalgamation to project
+        run: |
+          cp sqlcipher-amalgamation/sqlite3.c sqlcipher/src/main/jni/sqlcipher/
+          cp sqlcipher-amalgamation/sqlite3.h sqlcipher/src/main/jni/sqlcipher/
+
+      - name: Verify dependencies
+        run: |
+          echo "Checking OpenSSL libraries..."
+          ls -lh sqlcipher/src/main/jni/sqlcipher/android-libs/*/libcrypto.a
+          echo ""
+          echo "Checking OpenSSL headers..."
+          ls -lh sqlcipher/src/main/jni/sqlcipher/android-libs/include/
+          echo ""
+          echo "Checking SQLCipher amalgamation..."
+          ls -lh sqlcipher/src/main/jni/sqlcipher/sqlite3.*
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Build AAR
+        run: |
+          ${{ matrix.gradlew }} assembleRelease \
+            -PsqlcipherAndroidVersion=${{ env.SQLCIPHER_VERSION }}
+
+      - name: Verify AAR file
+        run: |
+          AAR_FILE=$(find sqlcipher/build/outputs/aar -name "*.aar" -type f)
+          if [ -z "$AAR_FILE" ]; then
+            echo "Error: AAR file not found!"
+            exit 1
+          fi
+          echo "AAR file found: $AAR_FILE"
+          ls -lh "$AAR_FILE"
+          
+          FILE_SIZE=$(stat -f%z "$AAR_FILE" 2>/dev/null || stat -c%s "$AAR_FILE")
+          if [ "$FILE_SIZE" -lt 1000000 ]; then
+            echo "Warning: AAR file size is less than 1MB, native libraries may be missing"
+          fi
+
+      - name: Upload AAR artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sqlcipher-android-aar-${{ env.SQLCIPHER_VERSION }}
+          path: sqlcipher/build/outputs/aar/*.aar
+          retention-days: 30
+
+      - name: Upload build logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-${{ runner.os }}
+          path: |
+            sqlcipher/build/outputs/logs/
+            sqlcipher/build/intermediates/
+          retention-days: 7
+
+  release:
+    name: Create Release
+    needs: build-aar
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download AAR artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: sqlcipher-android-aar-${{ env.SQLCIPHER_VERSION }}
+          path: artifacts/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: artifacts/*.aar
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
